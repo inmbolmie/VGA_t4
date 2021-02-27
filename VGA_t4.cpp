@@ -82,6 +82,11 @@ static int  ref_freq_num;
 static int  ref_freq_denom;
 static int  ref_pix_shift;
 static int  combine_shiftreg;
+static int firedIsrCount;
+static unsigned long start_isr_time;
+static boolean* ref_isr_fired;
+static unsigned long cpu_freqc;
+
 
 #ifdef DEBUG
 static uint32_t   ISRTicks_prev = 0;
@@ -101,6 +106,9 @@ PolyDef	PolySet;  // will contain a polygon data
 
 
 FASTRUN void VGA_T4::QT3_isr(void) {
+  start_isr_time = ARM_DWT_CYCCNT;
+  *ref_isr_fired=true;
+  firedIsrCount++;
   TMR3_SCTRL3 &= ~(TMR_SCTRL_TCF);
   TMR3_CSCTRL3 &= ~(TMR_CSCTRL_TCF1|TMR_CSCTRL_TCF2);
 
@@ -108,10 +116,10 @@ FASTRUN void VGA_T4::QT3_isr(void) {
   
   // V-PULSE
   if (currentLine > 0) {
-    digitalWrite(_vsync_pin, 1);
+    digitalWriteFast(_vsync_pin, 1);
     VSYNC = 0;
   } else {
-    digitalWrite(_vsync_pin, 0);
+    digitalWriteFast(_vsync_pin, 0);
     VSYNC = 1;
   }
   
@@ -141,6 +149,7 @@ FASTRUN void VGA_T4::QT3_isr(void) {
       flexio1DMA.TCD->SADDR = p;
     }
 
+ 
     // Enable DMAs
     DMA_SERQ = flexio2DMA.channel; 
     DMA_SERQ = flexio1DMA.channel; 
@@ -152,8 +161,27 @@ FASTRUN void VGA_T4::QT3_isr(void) {
   ISRTicks++; 
 #endif  
   asm volatile("dsb");
+
 }
 
+
+  void VGA_T4::start_isr_time_recording() {
+  	isr_fired = false;
+  
+  }
+  
+  void VGA_T4::stop_isr_time_recording() {
+  }
+  
+  boolean VGA_T4::has_fired_isr(){
+  return isr_fired;
+  }	
+
+
+
+  int VGA_T4::getFiredIsr() {
+  return firedIsrCount;
+  }
 
 VGA_T4::VGA_T4(int vsync_pin = DEFAULT_VSYNC_PIN)
 {
@@ -228,8 +256,13 @@ void VGA_T4::tweak_video(int shiftdelta, int numdelta, int denomdelta)
 }
 
 // display VGA image
-vga_error_t VGA_T4::begin(vga_mode_t mode)
+vga_error_t VGA_T4::begin(vga_mode_t mode, boolean* isr_fired, unsigned long long cpu_freq)
 {
+
+
+cpu_freqc= cpu_freq;
+
+  ref_isr_fired=isr_fired;
   uint32_t flexio_clock_div;
   combine_shiftreg = 0;
 //  int div_select = 49;
@@ -273,8 +306,8 @@ vga_error_t VGA_T4::begin(vga_mode_t mode)
       maxpixperline = fb_stride;
       flexio_clock_div = flexio_freq/pix_freq;
       line_double = 1;
-      pix_shift = 4;
-      combine_shiftreg = 1;
+      pix_shift = 3;
+      combine_shiftreg = 0;
       break;
     case VGA_MODE_640x480:
       left_border = backporch_pix;
@@ -285,8 +318,8 @@ vga_error_t VGA_T4::begin(vga_mode_t mode)
       maxpixperline = fb_stride;
       flexio_clock_div = (flexio_freq/pix_freq); 
       line_double = 0;
-      pix_shift = 4;
-      combine_shiftreg = 1;
+      pix_shift = 2+DMA_HACK; 
+      combine_shiftreg = 0;
       break;   
     case VGA_MODE_512x240:
       left_border = backporch_pix/1.3;
@@ -339,11 +372,12 @@ vga_error_t VGA_T4::begin(vga_mode_t mode)
   ref_freq_num = num;
   ref_freq_denom = denom;
   ref_pix_shift = pix_shift;
-
+#ifdef DEBUG
   Serial.println("frequency");
   Serial.println(flexio_freq);
   Serial.println("div");
   Serial.println(flexio_freq/pix_freq);
+#endif
 
   pinMode(_vsync_pin, OUTPUT);
   pinMode(PIN_HBLANK, OUTPUT);
@@ -622,7 +656,7 @@ vga_error_t VGA_T4::begin(vga_mode_t mode)
   CCM_CCGR6 |= 0xC0000000;              //enable clocks to CG15 of CGR6 for QT3
   //configure QTIMER3 Timer3 for test of alternating Compare1 and Compare2
   
-  #define MARGIN_N 1005 // 1206 at 720MHz //1005 at 600MHz
+  #define MARGIN_N  1005// 1206 at 720MHz //1005 at 600MHz //1689 at 1008MHz
   #define MARGIN_D 1000
 
   TMR3_CTRL3 = 0b0000000000100000;      //stop all functions of timer 
@@ -631,10 +665,26 @@ vga_error_t VGA_T4::begin(vga_mode_t mode)
   TMR3_CNTR3 = 0;
   TMR3_LOAD3 = 0;
   /* Inverted timings */
-  TMR3_COMP13 = ((4174*MARGIN_N)/MARGIN_D)-1;
-  TMR3_CMPLD13 = ((4174*MARGIN_N)/MARGIN_D)-1;
-  TMR3_COMP23 = ((569*MARGIN_N)/MARGIN_D)-1;
-  TMR3_CMPLD23 = ((569*MARGIN_N)/MARGIN_D)-1;
+  
+  unsigned long long rate = (1005ULL * cpu_freq) / 600000000ULL;
+  int rate2 = rate;
+  
+  int substract = 1;
+  if (cpu_freq > 950000000ULL && cpu_freq < 990000000ULL) {
+  	substract=5;
+  	rate2=1652;
+  }
+
+#ifdef DEBUG
+  Serial.print("MARGIN_N is: ");
+  Serial.println(rate2, DEC);
+  Serial.print("SUBSTRACT is: ");
+  Serial.println(substract, DEC);
+#endif  
+  TMR3_COMP13 = ((4174*rate2)/MARGIN_D)-substract;
+  TMR3_CMPLD13 = ((4174*rate2)/MARGIN_D)-substract;
+  TMR3_COMP23 = ((569*rate2)/MARGIN_D)-substract;
+  TMR3_CMPLD23 = ((569*rate2)/MARGIN_D)-substract;
 
   TMR3_CSCTRL3 = 0b0000000010000101;    //Compare1 only enabled - Compare Load1 control and Compare Load2 control both on
   TMR3_CTRL3 = 0b0011000000100100;      // 001(Count rising edges Primary Source),1000(IP Bus Clock),00 (Secondary Source), 
@@ -723,6 +773,15 @@ void VGA_T4::drawPixel(int x, int y, vga_pixel color){
 
 vga_pixel VGA_T4::getPixel(int x, int y){
   return(framebuffer[y*fb_stride+x]);
+}
+
+
+int VGA_T4::get_fb_stride(){
+  return(fb_stride);
+}
+
+vga_pixel * VGA_T4::get_frame_buffer() {
+  return framebuffer;
 }
 
 vga_pixel * VGA_T4::getLineBuffer(int j) {
@@ -2262,7 +2321,9 @@ FLASHMEM void VGA_T4::begin_audio(int samplesize, void (*callback)(short * strea
   i2s_tx_buffer =  (uint32_t*)malloc(samplesize*sizeof(uint32_t)); //&i2s_tx[0];
 
   if (i2s_tx_buffer == NULL) {
+  #ifdef DEBUG
     Serial.println("could not allocate audio samples");
+  #endif
     return;  
   }
   memset((void*)i2s_tx_buffer,0, samplesize*sizeof(uint32_t));
@@ -2292,4 +2353,3 @@ FLASHMEM void VGA_T4::end_audio()
   	free(i2s_tx_buffer);
   }
 }
-

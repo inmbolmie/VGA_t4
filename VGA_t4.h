@@ -23,7 +23,7 @@
 
 
 // Enable debug info (requires serial initialization)
-//#define DEBUG
+#define DEBUG
 
 // Enable 12bits mode
 // Default is 8bits RRRGGGBB (332) 
@@ -173,7 +173,7 @@ public:
   VGA_T4(int vsync_pin = DEFAULT_VSYNC_PIN);
 
   // display VGA image
-  vga_error_t begin(vga_mode_t mode);
+  vga_error_t begin(vga_mode_t mode, boolean* isr_fired, unsigned long  long 	cpu_freq);
   void begin_audio(int samplesize, void (*callback)(short * stream, int len));
   void end();
   void end_audio();
@@ -195,6 +195,15 @@ public:
   void drawPixel(int x, int y, vga_pixel color);
   vga_pixel getPixel(int x, int y);
   vga_pixel * getLineBuffer(int j);
+  void start_isr_time_recording();
+  void stop_isr_time_recording();
+  boolean has_fired_isr() ;
+  static boolean isr_fired;
+  int get_fb_stride();
+  vga_pixel * get_frame_buffer();
+  unsigned long get_cycles_last_isr_start();
+  unsigned long get_cycles_last_isr_end();
+  int getFiredIsr();
   void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, vga_pixel color);
   void drawText(int16_t x, int16_t y, const char * text, vga_pixel fgcolor, vga_pixel bgcolor, bool doublesize);
   void drawSprite(int16_t x, int16_t y, const int16_t *bitmap);
@@ -223,6 +232,7 @@ public:
   void drawrotatepolygon(int16_t cx, int16_t cy, int16_t Angle, vga_pixel fillcolor, vga_pixel bordercolor, uint8_t filled);
   // *******************************************************************************************************************************
 
+  
 
   // =========================================================
   // Game engine
